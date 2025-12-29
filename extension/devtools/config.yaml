@@ -1,0 +1,5 @@
+name: perf_insight
+issueTracker: https://github.com/SAGARSURI/perf_insight/issues
+version: 1.0.8
+materialIconCodePoint: '0xe1b1'
+requiresConnection: true
