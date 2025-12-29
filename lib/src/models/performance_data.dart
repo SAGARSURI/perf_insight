@@ -1,30 +1,8 @@
 /// Performance data models for CPU, Memory, and Timeline metrics.
 /// These models are designed with privacy-first redaction built in.
-
-// ============================================================================
-// CPU PROFILING STATUS
-// ============================================================================
-
-/// Status of CPU profiling availability and activity.
-class CpuProfilingStatus {
-  final bool isAvailable;
-  final int sampleCount;
-  final int functionCount;
-  final String message;
-  final String hint;
-  final String? error;
-
-  CpuProfilingStatus({
-    required this.isAvailable,
-    this.sampleCount = 0,
-    this.functionCount = 0,
-    required this.message,
-    required this.hint,
-    this.error,
-  });
-
-  bool get hasData => sampleCount > 0;
-}
+///
+/// Note: CpuProfilingStatus is defined in cpu_collector.dart and re-exported
+/// from performance_collector.dart for backwards compatibility.
 
 // ============================================================================
 // SOURCE LOCATION & RETENTION PATH MODELS
