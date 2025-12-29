@@ -255,6 +255,10 @@ abstract class LlmProvider {
   /// Analyze a specific class with retention path context.
   Future<String> analyzeClass(Map<String, dynamic> classContext);
 
+  /// Dispose of resources (HTTP clients, etc.).
+  /// Call this when the provider is no longer needed.
+  void dispose();
+
   /// Factory to create the appropriate provider.
   factory LlmProvider.create(LlmConfig config) {
     switch (config.type) {
@@ -273,9 +277,18 @@ class ClaudeProvider implements LlmProvider {
   final LlmConfig _config;
   final http.Client _httpClient;
   late final String _model;
+  bool _isDisposed = false;
 
   ClaudeProvider(this._config) : _httpClient = http.Client() {
     _model = _config.effectiveModel;
+  }
+
+  @override
+  void dispose() {
+    if (!_isDisposed) {
+      _httpClient.close();
+      _isDisposed = true;
+    }
   }
 
   @override
@@ -444,9 +457,18 @@ class OpenAIProvider implements LlmProvider {
   final LlmConfig _config;
   final http.Client _httpClient;
   late final String _model;
+  bool _isDisposed = false;
 
   OpenAIProvider(this._config) : _httpClient = http.Client() {
     _model = _config.effectiveModel;
+  }
+
+  @override
+  void dispose() {
+    if (!_isDisposed) {
+      _httpClient.close();
+      _isDisposed = true;
+    }
   }
 
   @override
@@ -586,9 +608,18 @@ class GeminiProvider implements LlmProvider {
   final LlmConfig _config;
   final http.Client _httpClient;
   late final String _model;
+  bool _isDisposed = false;
 
   GeminiProvider(this._config) : _httpClient = http.Client() {
     _model = _config.effectiveModel;
+  }
+
+  @override
+  void dispose() {
+    if (!_isDisposed) {
+      _httpClient.close();
+      _isDisposed = true;
+    }
   }
 
   @override

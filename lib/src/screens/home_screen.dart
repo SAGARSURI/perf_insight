@@ -37,11 +37,17 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _errorMessage;
   bool _isConnected = false;
 
-  // New: Class drill-down state
+  // Class drill-down state
   ViewMode _viewMode = ViewMode.overview;
   AllocationSample? _selectedClass;
   bool _isLoadingClassDetails = false;
   String? _classAiInsight;
+
+  // Race condition prevention: track selection version
+  int _classSelectionVersion = 0;
+
+  // Cache for enhanced class info to avoid re-fetching
+  final Map<String, AllocationSample> _enhancedClassCache = {};
 
   @override
   void initState() {
@@ -123,11 +129,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Replace the enhanced classes in the allocations list
     final updatedAllocations = snapshot.memory!.topAllocations.map((original) {
-      final enhanced = enhancedClasses.firstWhere(
-        (e) => e?.className == original.className,
-        orElse: () => null,
-      );
-      return enhanced ?? original;
+      // Find matching enhanced class (if any)
+      for (final enhanced in enhancedClasses) {
+        if (enhanced != null && enhanced.className == original.className) {
+          return enhanced;
+        }
+      }
+      return original;
     }).toList();
 
     // Log what we got
@@ -290,6 +298,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _reset() {
+    // Clear the cache when resetting
+    _enhancedClassCache.clear();
+    _classSelectionVersion++;
+
     setState(() {
       _snapshot = null;
       _analysisResult = null;
@@ -303,29 +315,47 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Handle class selection from the treemap.
   Future<void> _onClassSelected(AllocationSample allocation) async {
+    // Increment version to invalidate any in-flight requests
+    final currentVersion = ++_classSelectionVersion;
+
+    // Check cache first
+    final cacheKey = allocation.classId ?? allocation.className;
+    final cached = _enhancedClassCache[cacheKey];
+
     setState(() {
-      _selectedClass = allocation;
+      _selectedClass = cached ?? allocation;
       _viewMode = ViewMode.classDetail;
-      _isLoadingClassDetails = true;
+      _isLoadingClassDetails = cached == null;
       _classAiInsight = null;
     });
+
+    // If we have cached data, no need to fetch
+    if (cached != null) return;
 
     // Load enhanced details (source location, retention path)
     if (_collector != null && allocation.classId != null) {
       try {
         final enhanced = await _collector!.getEnhancedAllocationInfo(allocation);
-        if (mounted && _selectedClass?.className == allocation.className) {
-          setState(() {
-            _selectedClass = enhanced;
-            _isLoadingClassDetails = false;
-          });
+
+        // Check if this request is still valid (user hasn't selected another class)
+        if (!mounted || currentVersion != _classSelectionVersion) return;
+
+        // Cache the enhanced data
+        if (enhanced != null) {
+          _enhancedClassCache[cacheKey] = enhanced;
         }
+
+        setState(() {
+          _selectedClass = enhanced ?? allocation;
+          _isLoadingClassDetails = false;
+        });
       } catch (e) {
-        if (mounted) {
-          setState(() {
-            _isLoadingClassDetails = false;
-          });
-        }
+        // Check if this request is still valid
+        if (!mounted || currentVersion != _classSelectionVersion) return;
+
+        setState(() {
+          _isLoadingClassDetails = false;
+        });
       }
     } else {
       setState(() {
@@ -538,6 +568,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Refresh memory data without running AI analysis.
   Future<void> _refreshData() async {
     if (_collector == null || _isRefreshing) return;
+
+    // Clear cache since we're getting fresh data
+    _enhancedClassCache.clear();
+    _classSelectionVersion++;
 
     setState(() {
       _isRefreshing = true;

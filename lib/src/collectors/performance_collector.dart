@@ -1050,22 +1050,37 @@ class PerformanceCollector {
   }
 
   /// Get enhanced CPU data with source locations for top user functions.
+  /// Fetches source locations in parallel for better performance.
   Future<CpuData?> getEnhancedCpuData(CpuData basic) async {
-    final enhancedFunctions = <FunctionSample>[];
+    // Get user functions that need enhancement
+    final userFunctionsToEnhance = basic.topFunctions
+        .where((f) => f.isUserFunction && f.functionId != null)
+        .toList();
 
-    for (final func in basic.topFunctions) {
-      // Only get source for user functions (not framework/dart:core)
-      if (func.isUserFunction && func.functionId != null) {
+    // Fetch source locations in parallel for all user functions
+    final enhancedResults = await Future.wait(
+      userFunctionsToEnhance.map((func) async {
         try {
           final sourceLocation = await getFunctionSourceLocation(func.functionId!);
-          enhancedFunctions.add(func.copyWith(sourceLocation: sourceLocation));
+          return func.copyWith(sourceLocation: sourceLocation);
         } catch (e) {
-          enhancedFunctions.add(func);
+          return func;
         }
-      } else {
-        enhancedFunctions.add(func);
+      }),
+    );
+
+    // Rebuild the list maintaining original order
+    final enhancedFunctions = basic.topFunctions.map((func) {
+      if (func.isUserFunction && func.functionId != null) {
+        // Find the enhanced version
+        final enhanced = enhancedResults.firstWhere(
+          (e) => e.functionId == func.functionId,
+          orElse: () => func,
+        );
+        return enhanced;
       }
-    }
+      return func;
+    }).toList();
 
     return CpuData(
       sampleCount: basic.sampleCount,
