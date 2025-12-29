@@ -3,25 +3,33 @@
 /// Handles memory usage collection, allocation profiling,
 /// retention path analysis, and source location resolution.
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:vm_service/vm_service.dart';
 
 import '../models/performance_data.dart';
+import '../services/code_context_service.dart';
+
+/// Timeout for VM service calls in milliseconds.
+const int _vmServiceTimeoutMs = 10000;
 
 /// Collects memory and heap allocation data from the VM service.
 class MemoryCollector {
   final VmService _vmService;
+  final CodeContextService _codeContext;
 
-  MemoryCollector(this._vmService);
+  MemoryCollector(this._vmService) : _codeContext = CodeContextService(_vmService);
 
   /// Collect memory allocation data.
   Future<MemoryData?> collect(String isolateId) async {
-    final allocationProfile = await _vmService.getAllocationProfile(
-      isolateId,
-      gc: false,
-    );
+    final allocationProfile = await _vmService
+        .getAllocationProfile(isolateId, gc: false)
+        .timeout(Duration(milliseconds: _vmServiceTimeoutMs));
 
-    final memoryUsage = await _vmService.getMemoryUsage(isolateId);
+    final memoryUsage = await _vmService
+        .getMemoryUsage(isolateId)
+        .timeout(Duration(milliseconds: _vmServiceTimeoutMs));
 
     // Aggregate class allocations
     final allocations = <AllocationSample>[];
@@ -80,7 +88,9 @@ class MemoryCollector {
     try {
       debugPrint('getRetentionPath: Getting class object for $classId');
 
-      final classObj = await _vmService.getObject(isolateId, classId);
+      final classObj = await _vmService
+          .getObject(isolateId, classId)
+          .timeout(Duration(milliseconds: _vmServiceTimeoutMs));
 
       if (classObj is! Class) {
         debugPrint('getRetentionPath: Object is not a Class, got ${classObj.runtimeType}');
@@ -90,7 +100,9 @@ class MemoryCollector {
       debugPrint('getRetentionPath: Found class ${classObj.name}');
 
       // Get instances of this class
-      final instances = await _vmService.getInstances(isolateId, classId, 10);
+      final instances = await _vmService
+          .getInstances(isolateId, classId, 10)
+          .timeout(Duration(milliseconds: _vmServiceTimeoutMs));
 
       debugPrint('getRetentionPath: Got ${instances.instances?.length ?? 0} instances');
 
@@ -106,11 +118,9 @@ class MemoryCollector {
         return null;
       }
 
-      final retainingPath = await _vmService.getRetainingPath(
-        isolateId,
-        firstInstance.id!,
-        100,
-      );
+      final retainingPath = await _vmService
+          .getRetainingPath(isolateId, firstInstance.id!, 100)
+          .timeout(Duration(milliseconds: _vmServiceTimeoutMs));
 
       debugPrint('getRetentionPath: Got ${retainingPath.elements?.length ?? 0} elements in path');
 
@@ -129,7 +139,9 @@ class MemoryCollector {
     try {
       debugPrint('getClassSourceLocation: Getting class for $classId');
 
-      final classObj = await _vmService.getObject(isolateId, classId);
+      final classObj = await _vmService
+          .getObject(isolateId, classId)
+          .timeout(Duration(milliseconds: _vmServiceTimeoutMs));
 
       if (classObj is! Class) {
         debugPrint('getClassSourceLocation: Object is not a Class');
@@ -152,32 +164,43 @@ class MemoryCollector {
 
       debugPrint('getClassSourceLocation: Script URI = ${scriptRef!.uri}');
 
-      final scriptObj = await _vmService.getObject(isolateId, scriptRef.id!);
+      final scriptObj = await _vmService
+          .getObject(isolateId, scriptRef.id!)
+          .timeout(Duration(milliseconds: _vmServiceTimeoutMs));
 
       final script = scriptObj is Script ? scriptObj : null;
-      final hasSource = script != null && script.source != null;
-      debugPrint('getClassSourceLocation: hasSource = $hasSource');
+      String? sourceCode = script?.source;
+      debugPrint('getClassSourceLocation: VM source = ${sourceCode != null}');
+
+      // If VM Service doesn't have source (profile mode), try DTD
+      if (sourceCode == null && _codeContext.isDtdAvailable) {
+        debugPrint('getClassSourceLocation: VM source NULL, trying DTD for ${scriptRef.uri}');
+        sourceCode = await _codeContext.getFileSource(scriptRef.uri!);
+        debugPrint('getClassSourceLocation: DTD source = ${sourceCode != null}');
+      }
 
       int? lineNumber;
       String? codeSnippet;
       String? stateClassCode;
       final className = classObj.name ?? '';
 
-      // Try to get line number
+      // Try to get line number from location first
       if (location.line != null && location.line! > 1) {
         lineNumber = location.line!;
         debugPrint('getClassSourceLocation: Got line from location.line = $lineNumber');
-      } else if (script != null && script.source != null && className.isNotEmpty) {
-        lineNumber = _findClassDefinitionLine(script, className);
+      } else if (sourceCode != null && className.isNotEmpty) {
+        // Search for class in source code
+        lineNumber = _findClassDefinitionLineInSource(sourceCode, className);
+        debugPrint('getClassSourceLocation: Found line by searching = $lineNumber');
       }
 
       // Extract code snippets if source is available
-      if (script != null && script.source != null && lineNumber != null) {
-        codeSnippet = _extractCodeSnippet(script, lineNumber, 15);
-        stateClassCode = _findFieldUsageContext(script, className);
+      if (sourceCode != null && lineNumber != null) {
+        codeSnippet = _extractCodeSnippetFromSource(sourceCode, lineNumber, 15);
+        stateClassCode = _findFieldUsageContextInSource(sourceCode, className);
       }
 
-      debugPrint('getClassSourceLocation: Final lineNumber = ${lineNumber ?? 'unknown'}');
+      debugPrint('getClassSourceLocation: Final lineNumber = ${lineNumber ?? 'unknown'}, hasSnippet = ${codeSnippet != null}');
 
       return CodeLocation(
         filePath: scriptRef.uri!,
@@ -192,7 +215,8 @@ class MemoryCollector {
     }
   }
 
-  /// Get enhanced allocation info including source location and retention path.
+  /// Get enhanced allocation info including source location, retention path,
+  /// and codebase usage context.
   Future<AllocationSample?> getEnhancedAllocationInfo(
     String isolateId,
     AllocationSample basic,
@@ -200,21 +224,74 @@ class MemoryCollector {
     if (basic.classId == null) return basic;
 
     try {
+      // Fetch source location, retention path, and class usages in parallel
       final results = await Future.wait([
         getClassSourceLocation(isolateId, basic.classId!).catchError((_) => null),
         getRetentionPath(isolateId, basic.classId!).catchError((_) => null),
+        _fetchClassUsages(basic.className, isolateId, basic.classId),
       ]);
 
       final sourceLocation = results[0] as CodeLocation?;
       final retentionInfo = results[1] as RetentionInfo?;
+      final classUsages = results[2] as List<ClassUsageInfo>?;
 
       return basic.copyWith(
         sourceLocation: sourceLocation,
         retentionInfo: retentionInfo,
+        classUsages: classUsages,
       );
     } catch (e) {
       debugPrint('Error getting enhanced allocation info: $e');
       return basic;
+    }
+  }
+
+  /// Fetch where a class is used in the codebase using CodeContextService.
+  Future<List<ClassUsageInfo>?> _fetchClassUsages(
+    String className,
+    String isolateId,
+    String? classId,
+  ) async {
+    try {
+      // Only fetch usages for user classes (skip internal Dart/Flutter classes)
+      if (className.startsWith('_')) {
+        debugPrint('_fetchClassUsages: Skipping $className (starts with _)');
+        return null;
+      }
+
+      debugPrint('_fetchClassUsages: Fetching context for $className...');
+      debugPrint('  DTD available: ${_codeContext.isDtdAvailable}');
+
+      final context = await _codeContext.getClassContext(
+        className,
+        isolateId,
+        classId,
+      );
+
+      debugPrint('  Found ${context.usages.length} usages');
+      debugPrint('  Has classDefinition: ${context.classDefinition != null}');
+
+      if (context.usages.isEmpty) {
+        debugPrint('  No usages found, returning null');
+        return null;
+      }
+
+      // Convert CodeContextService.ClassUsage to ClassUsageInfo
+      final usages = context.usages.take(5).map((usage) {
+        debugPrint('  Usage: ${usage.filePath}:${usage.lineNumber}');
+        return ClassUsageInfo(
+          filePath: usage.filePath,
+          lineNumber: usage.lineNumber,
+          lineContent: usage.lineContent,
+          context: usage.context,
+        );
+      }).toList();
+
+      debugPrint('  Returning ${usages.length} usages');
+      return usages;
+    } catch (e) {
+      debugPrint('_fetchClassUsages ERROR for $className: $e');
+      return null;
     }
   }
 
@@ -343,6 +420,46 @@ class MemoryCollector {
         final contextStart = (i - 5).clamp(0, lines.length - 1);
         final contextEnd = (i + 20).clamp(0, lines.length);
         debugPrint('getClassSourceLocation: Found field usage at line ${i + 1}');
+        return lines.sublist(contextStart, contextEnd).join('\n');
+      }
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Source-string based helpers (for DTD fallback when VM source is unavailable)
+  // ---------------------------------------------------------------------------
+
+  int? _findClassDefinitionLineInSource(String source, String className) {
+    debugPrint('_findClassDefinitionLineInSource: Searching for "class $className"');
+    final lines = source.split('\n');
+    for (int i = 0; i < lines.length; i++) {
+      if (lines[i].contains('class $className ') ||
+          lines[i].contains('class $className{') ||
+          lines[i].contains('class $className<')) {
+        debugPrint('_findClassDefinitionLineInSource: Found at line ${i + 1}');
+        return i + 1;
+      }
+    }
+    return null;
+  }
+
+  String? _extractCodeSnippetFromSource(String source, int lineNumber, int numLines) {
+    final lines = source.split('\n');
+    final startLine = (lineNumber - 1).clamp(0, lines.length - 1);
+    final endLine = (startLine + numLines).clamp(0, lines.length);
+    return lines.sublist(startLine, endLine).join('\n');
+  }
+
+  String? _findFieldUsageContextInSource(String source, String className) {
+    final lines = source.split('\n');
+    for (int i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      if (line.contains('List<$className>') ||
+          (line.contains('Map<') && line.contains(className))) {
+        final contextStart = (i - 5).clamp(0, lines.length - 1);
+        final contextEnd = (i + 20).clamp(0, lines.length);
+        debugPrint('_findFieldUsageContextInSource: Found field usage at line ${i + 1}');
         return lines.sublist(contextStart, contextEnd).join('\n');
       }
     }

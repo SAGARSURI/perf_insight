@@ -1,7 +1,7 @@
 name: perf_insight
 description: "AI-Powered Memory Analysis for Flutter DevTools. Stop guessing about memory issues — get actionable recommendations powered by LLMs."
 publish_to: 'none'
-version: 1.0.8
+version: 1.0.13
 
 environment:
   sdk: ^3.8.1
@@ -13,6 +13,9 @@ dependencies:
   # DevTools extension framework
   devtools_extensions: ^0.4.0
   devtools_app_shared: ^0.4.0
+
+  # Dart Tooling Daemon for file system access
+  dtd: ^4.0.0
 
   # VM Service for performance data
   vm_service: ^15.0.0

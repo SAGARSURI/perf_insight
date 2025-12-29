@@ -354,6 +354,27 @@ class MemoryData {
       };
 }
 
+/// Represents a location where a class is used in code.
+class ClassUsageInfo {
+  final String filePath;
+  final int lineNumber;
+  final String lineContent;
+  final String context; // Surrounding code
+
+  ClassUsageInfo({
+    required this.filePath,
+    required this.lineNumber,
+    required this.lineContent,
+    required this.context,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'file': filePath,
+        'line': lineNumber,
+        'code': context,
+      };
+}
+
 /// Represents a class allocation sample with optional deep analysis data.
 class AllocationSample {
   final String className;
@@ -368,6 +389,9 @@ class AllocationSample {
   final List<AllocationSite>? allocationSites;
   final String? classId; // VM Service class ID for drill-down
 
+  // NEW: Where this class is used in the codebase
+  final List<ClassUsageInfo>? classUsages;
+
   // Cached isUserClass value (survives redaction when libraryUri is nulled)
   final bool? _isUserClassCached;
 
@@ -381,6 +405,7 @@ class AllocationSample {
     this.retentionInfo,
     this.allocationSites,
     this.classId,
+    this.classUsages,
     bool? isUserClassCached,
   }) : _isUserClassCached = isUserClassCached;
 
@@ -405,6 +430,42 @@ class AllocationSample {
     // Filter out common framework/tool packages
     if (libraryUri!.contains('package:devtools')) return false;
     if (libraryUri!.contains('package:vm_service')) return false;
+
+    // Filter out common pub packages (not user app code)
+    const commonPubPackages = [
+      'package:material_color_utilities/',
+      'package:collection/',
+      'package:meta/',
+      'package:vector_math/',
+      'package:typed_data/',
+      'package:characters/',
+      'package:async/',
+      'package:path/',
+      'package:http/',
+      'package:http_parser/',
+      'package:crypto/',
+      'package:convert/',
+      'package:shared_preferences/',
+      'package:fl_chart/',
+      'package:riverpod/',
+      'package:provider/',
+      'package:bloc/',
+      'package:get/',
+      'package:dio/',
+      'package:json_annotation/',
+      'package:freezed_annotation/',
+      'package:equatable/',
+      'package:intl/',
+      'package:url_launcher/',
+      'package:sqflite/',
+      'package:hive/',
+      'package:drift/',
+      'package:dtd/',
+      'package:cupertino_icons/',
+    ];
+    for (final pkg in commonPubPackages) {
+      if (libraryUri!.startsWith(pkg)) return false;
+    }
 
     // POSITIVE MATCH: Must be from a user package (package:something/)
     // and not from internal VM classes (which often have no package: prefix)
@@ -444,6 +505,8 @@ class AllocationSample {
       retentionInfo: retentionInfo,
       allocationSites: allocationSites,
       classId: classId,
+      // Keep class usages for LLM context (shows where class is used)
+      classUsages: keepClassName ? classUsages : null,
       // CRITICAL: Cache the isUserClass value before libraryUri is nulled
       isUserClassCached: isUserClass,
     );
@@ -454,6 +517,7 @@ class AllocationSample {
     CodeLocation? sourceLocation,
     RetentionInfo? retentionInfo,
     List<AllocationSite>? allocationSites,
+    List<ClassUsageInfo>? classUsages,
   }) {
     return AllocationSample(
       className: className,
@@ -465,6 +529,7 @@ class AllocationSample {
       retentionInfo: retentionInfo ?? this.retentionInfo,
       allocationSites: allocationSites ?? this.allocationSites,
       classId: classId,
+      classUsages: classUsages ?? this.classUsages,
       isUserClassCached: _isUserClassCached,
     );
   }
@@ -479,6 +544,8 @@ class AllocationSample {
         if (retentionInfo != null) 'retentionInfo': retentionInfo!.toJson(),
         if (allocationSites != null)
           'allocationSites': allocationSites!.map((s) => s.toJson()).toList(),
+        if (classUsages != null && classUsages!.isNotEmpty)
+          'classUsages': classUsages!.take(5).map((u) => u.toJson()).toList(),
       };
 }
 

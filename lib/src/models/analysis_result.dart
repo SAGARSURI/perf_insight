@@ -71,6 +71,16 @@ class PerformanceIssue {
   final List<String> suggestedFixes;
   final String? codeExample;
 
+  /// Source file where the issue was found (e.g., "main.dart")
+  final String? sourceFile;
+
+  /// Line number in the source file
+  final int? lineNumber;
+
+  /// Retention path showing why objects are retained
+  /// e.g., ["ProductItem", "_productCatalog", "State", "Widget Tree"]
+  final List<String>? retentionPath;
+
   PerformanceIssue({
     required this.title,
     required this.description,
@@ -79,6 +89,9 @@ class PerformanceIssue {
     this.affectedArea,
     required this.suggestedFixes,
     this.codeExample,
+    this.sourceFile,
+    this.lineNumber,
+    this.retentionPath,
   });
 
   factory PerformanceIssue.fromJson(Map<String, dynamic> json) {
@@ -91,7 +104,20 @@ class PerformanceIssue {
       suggestedFixes:
           (json['suggestedFixes'] as List<dynamic>?)?.cast<String>() ?? [],
       codeExample: json['codeExample'] as String?,
+      sourceFile: json['sourceFile'] as String?,
+      lineNumber: json['lineNumber'] as int?,
+      retentionPath:
+          (json['retentionPath'] as List<dynamic>?)?.cast<String>(),
     );
+  }
+
+  /// Returns the display location (e.g., "main.dart:96")
+  String? get displayLocation {
+    if (sourceFile == null) return null;
+    if (lineNumber != null) {
+      return '$sourceFile:$lineNumber';
+    }
+    return sourceFile;
   }
 
   Map<String, dynamic> toJson() => {
@@ -102,6 +128,9 @@ class PerformanceIssue {
         if (affectedArea != null) 'affectedArea': affectedArea,
         'suggestedFixes': suggestedFixes,
         if (codeExample != null) 'codeExample': codeExample,
+        if (sourceFile != null) 'sourceFile': sourceFile,
+        if (lineNumber != null) 'lineNumber': lineNumber,
+        if (retentionPath != null) 'retentionPath': retentionPath,
       };
 }
 

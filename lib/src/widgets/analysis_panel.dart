@@ -283,34 +283,35 @@ class IssueCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final severityColor = _getSeverityColor();
+
     return Card(
       elevation: 0,
+      // Improvement #5: Severity color coding on card background
+      color: severityColor.withOpacity(0.05),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: _getSeverityColor().withOpacity(0.5),
+          color: severityColor.withOpacity(0.5),
+          width: issue.severity == IssueSeverity.critical ||
+                  issue.severity == IssueSeverity.high
+              ? 2
+              : 1,
         ),
       ),
       child: ExpansionTile(
         leading: _buildSeverityIcon(),
-        title: Text(
-          issue.title,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-        subtitle: Row(
-          children: [
-            _buildChip(issue.severity.displayName, _getSeverityColor()),
-            const SizedBox(width: 4),
-            _buildChip(issue.category.displayName, Colors.blue),
-          ],
-        ),
+        title: _buildTitle(context),
+        subtitle: _buildSubtitle(context),
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(issue.description),
+                // Improvement #2: Better description readability
+                _buildDescription(context),
+
                 if (issue.suggestedFixes.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   Text(
@@ -346,6 +347,120 @@ class IssueCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // Improvement #1: Title with line number
+  Widget _buildTitle(BuildContext context) {
+    final location = issue.displayLocation;
+
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            issue.title,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        if (location != null) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.location_on,
+                  size: 12,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  location,
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSubtitle(BuildContext context) {
+    return Row(
+      children: [
+        _buildChip(issue.severity.displayName, _getSeverityColor()),
+        const SizedBox(width: 4),
+        _buildChip(issue.category.displayName, Colors.blue),
+      ],
+    );
+  }
+
+  // Improvement #2: Better description with code separated
+  Widget _buildDescription(BuildContext context) {
+    final description = issue.description;
+
+    // Check if description contains inline code (backticks)
+    final codePattern = RegExp(r'`([^`]+)`');
+    final matches = codePattern.allMatches(description);
+
+    if (matches.isEmpty) {
+      return Text(description);
+    }
+
+    // Split description into text and code parts
+    final parts = <InlineSpan>[];
+    int lastEnd = 0;
+
+    for (final match in matches) {
+      // Add text before the code
+      if (match.start > lastEnd) {
+        parts.add(TextSpan(text: description.substring(lastEnd, match.start)));
+      }
+
+      // Add the code with monospace styling
+      parts.add(WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            match.group(1)!,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+        ),
+      ));
+      lastEnd = match.end;
+    }
+
+    // Add remaining text after last code match
+    if (lastEnd < description.length) {
+      parts.add(TextSpan(text: description.substring(lastEnd)));
+    }
+
+    return RichText(
+      text: TextSpan(
+        style: Theme.of(context).textTheme.bodyMedium,
+        children: parts,
       ),
     );
   }

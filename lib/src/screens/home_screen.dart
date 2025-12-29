@@ -43,8 +43,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoadingClassDetails = false;
   String? _classAiInsight;
 
-  // Race condition prevention: track selection version
+  // Race condition prevention: track selection and analysis versions
   int _classSelectionVersion = 0;
+  int _analysisVersion = 0;
 
   // Cache for enhanced class info to avoid re-fetching
   final Map<String, AllocationSample> _enhancedClassCache = {};
@@ -119,6 +120,7 @@ class _HomeScreenState extends State<HomeScreen> {
           final enhanced = await _collector!.getEnhancedAllocationInfo(allocation);
           debugPrint('  sourceLocation: ${enhanced?.sourceLocation?.displayPath}');
           debugPrint('  retentionInfo: ${enhanced?.retentionInfo?.pathSummary}');
+          debugPrint('  classUsages: ${enhanced?.classUsages?.length ?? 0} usages');
           return enhanced;
         } catch (e) {
           debugPrint('  ERROR: $e');
@@ -193,6 +195,9 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // Increment version to invalidate any in-flight analysis
+    final currentAnalysisVersion = ++_analysisVersion;
+
     // Load settings
     final config = await SettingsLoader.loadActiveConfig();
     if (config == null) {
@@ -212,6 +217,12 @@ class _HomeScreenState extends State<HomeScreen> {
       // Collect performance data
       final snapshot = await _collector!.collectSnapshot();
 
+      // Check if this analysis is still valid (user hasn't started another)
+      if (!mounted || currentAnalysisVersion != _analysisVersion) {
+        debugPrint('Analysis version mismatch after collectSnapshot, aborting');
+        return;
+      }
+
       setState(() {
         _snapshot = snapshot;
         _analysisState = AnalysisState.analyzing;
@@ -223,6 +234,12 @@ class _HomeScreenState extends State<HomeScreen> {
       // Fetch enhanced data (retention paths, source locations) for top user classes
       // This gives the AI the exact root cause information
       final enhancedSnapshot = await _enhanceTopClasses(snapshot);
+
+      // Check if this analysis is still valid after enhancement
+      if (!mounted || currentAnalysisVersion != _analysisVersion) {
+        debugPrint('Analysis version mismatch after _enhanceTopClasses, aborting');
+        return;
+      }
 
       // Check if we're in debug mode (source code available)
       // by checking if any allocation has a codeSnippet
@@ -237,7 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Debug: Log the data being sent to AI and store for UI inspection
       final debugBuffer = StringBuffer();
-      debugBuffer.writeln('=== DATA BEING SENT TO AI ===');
+      debugBuffer.writeln('=== DATA BEING SENT TO AI (v2) ===');
       debugBuffer.writeln('Privacy level: $privacyLevel');
       final appClasses = (analysisData['memory'] as Map<String, dynamic>?)?['appClasses'] as List?;
       if (appClasses != null && appClasses.isNotEmpty) {
@@ -246,12 +263,15 @@ class _HomeScreenState extends State<HomeScreen> {
           final classData = cls as Map<String, dynamic>;
           final codeSnippet = classData['codeSnippet'] as String?;
           final usageContext = classData['usageContext'] as String?;
+          final codebaseUsages = classData['codebaseUsages'] as List?;
           debugBuffer.writeln('  ${classData['className']}:');
           debugBuffer.writeln('    sourceLocation: ${classData['sourceLocation'] ?? 'NULL'}');
           debugBuffer.writeln('    retentionPath: ${classData['retentionPath'] ?? 'NULL'}');
           debugBuffer.writeln('    rootType: ${classData['rootType'] ?? 'NULL'}');
           debugBuffer.writeln('    codeSnippet: ${codeSnippet != null ? '${codeSnippet.length} chars' : 'NULL'}');
           debugBuffer.writeln('    usageContext: ${usageContext != null ? '${usageContext.length} chars' : 'NULL'}');
+          debugBuffer.writeln('    codebaseUsages: ${codebaseUsages != null ? '${codebaseUsages.length} usages' : 'NULL'}');
+          debugBuffer.writeln('    codeContextAvailable: ${classData['codeContextAvailable'] ?? false}');
         }
       } else {
         debugBuffer.writeln('WARNING: No appClasses in analysisData!');
@@ -285,11 +305,22 @@ class _HomeScreenState extends State<HomeScreen> {
       final provider = LlmProvider.create(config);
       final result = await provider.analyzePerformance(analysisData);
 
+      // Final check if this analysis is still valid
+      if (!mounted || currentAnalysisVersion != _analysisVersion) {
+        debugPrint('Analysis version mismatch after LLM analysis, aborting');
+        return;
+      }
+
       setState(() {
         _analysisResult = result;
         _analysisState = AnalysisState.complete;
       });
     } catch (e) {
+      // Only show error if this analysis is still valid
+      if (!mounted || currentAnalysisVersion != _analysisVersion) {
+        debugPrint('Analysis version mismatch in error handler, ignoring error');
+        return;
+      }
       setState(() {
         _errorMessage = e.toString();
         _analysisState = AnalysisState.error;
@@ -301,6 +332,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Clear the cache when resetting
     _enhancedClassCache.clear();
     _classSelectionVersion++;
+    _analysisVersion++; // Cancel any in-flight analysis
 
     setState(() {
       _snapshot = null;
@@ -700,7 +732,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return AnalysisPanel(
         result: _analysisResult!,
         // Only show debug info in debug mode (when source code is available)
-        debugInfo: _isDebugMode ? _lastAiDataDebug : null,
+        debugInfo: _lastAiDataDebug, // Always show debug panel
       );
     }
 

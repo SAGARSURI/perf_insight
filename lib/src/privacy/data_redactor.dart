@@ -91,7 +91,8 @@ class DataRedactor {
     };
   }
 
-  /// Enhanced memory summary that includes retention paths and source locations.
+  /// Enhanced memory summary that includes retention paths, source locations,
+  /// and codebase usage context.
   Map<String, dynamic>? _createEnhancedMemorySummary(MemoryData? memory) {
     if (memory == null) return null;
 
@@ -125,6 +126,16 @@ class DataRedactor {
           if (a.retentionInfo != null) ...{
             'retentionPath': a.retentionInfo!.pathSummary,
             'rootType': a.retentionInfo!.rootType,
+          },
+          // NEW: Include where this class is used in the codebase
+          // This enables the LLM to reference actual file:line locations
+          if (a.classUsages != null && a.classUsages!.isNotEmpty) ...{
+            'codebaseUsages': a.classUsages!.take(3).map((u) => {
+                'file': u.filePath,
+                'line': u.lineNumber,
+                'code': u.context,
+              }).toList(),
+            'codeContextAvailable': true,
           },
         };
       }).toList(),
